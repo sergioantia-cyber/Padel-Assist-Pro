@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { generateUpcomingCalendarDays } from '../apiService';
 
 export interface CalendarDay {
   dayNumber: number;
@@ -8,6 +9,8 @@ export interface CalendarDay {
   statusType: 'available' | 'low' | 'high_demand' | 'full';
   dateStr: string;
   fullDateText: string;
+  monthYearLabel?: string;
+  weekLabel?: string;
 }
 
 interface CalendarStripProps {
@@ -19,71 +22,31 @@ export const CalendarStrip: React.FC<CalendarStripProps> = ({
   selectedDate,
   onSelectDate,
 }) => {
-  const days: CalendarDay[] = [
-    {
-      dayNumber: 14,
-      dayName: 'LUN',
-      isToday: true,
-      statusLabel: 'Hoy',
-      statusType: 'available',
-      dateStr: '2024-10-14',
-      fullDateText: 'Lunes 14 de Octubre',
-    },
-    {
-      dayNumber: 15,
-      dayName: 'MAR',
-      isToday: false,
-      statusLabel: 'Libre',
-      statusType: 'available',
-      dateStr: '2024-10-15',
-      fullDateText: 'Martes 15 de Octubre',
-    },
-    {
-      dayNumber: 16,
-      dayName: 'MIÉ',
-      isToday: false,
-      statusLabel: 'Libre',
-      statusType: 'available',
-      dateStr: '2024-10-16',
-      fullDateText: 'Miércoles 16 de Octubre',
-    },
-    {
-      dayNumber: 17,
-      dayName: 'JUE',
-      isToday: false,
-      statusLabel: 'Pocos',
-      statusType: 'low',
-      dateStr: '2024-10-17',
-      fullDateText: 'Jueves 17 de Octubre',
-    },
-    {
-      dayNumber: 18,
-      dayName: 'VIE',
-      isToday: false,
-      statusLabel: 'Alta Dem.',
-      statusType: 'high_demand',
-      dateStr: '2024-10-18',
-      fullDateText: 'Viernes 18 de Octubre',
-    },
-    {
-      dayNumber: 19,
-      dayName: 'SÁB',
-      isToday: false,
-      statusLabel: 'Lleno',
-      statusType: 'full',
-      dateStr: '2024-10-19',
-      fullDateText: 'Sábado 19 de Octubre',
-    },
-    {
-      dayNumber: 20,
-      dayName: 'DOM',
-      isToday: false,
-      statusLabel: 'Libre',
-      statusType: 'available',
-      dateStr: '2024-10-20',
-      fullDateText: 'Domingo 20 de Octubre',
-    },
-  ];
+  const days: CalendarDay[] = useMemo(() => {
+    const generated = generateUpcomingCalendarDays(14);
+    return generated.map((item, idx) => {
+      const isWeekend = item.dayName === 'VIE' || item.dayName === 'SÁB';
+      return {
+        dayNumber: parseInt(item.dayNum, 10),
+        dayName: item.dayName,
+        isToday: item.isToday,
+        statusLabel: item.isToday
+          ? item.dayName
+          : isWeekend
+            ? 'Alta Dem.'
+            : idx === 2
+              ? 'Pocos'
+              : 'Libre',
+        statusType: isWeekend ? 'high_demand' : idx === 2 ? 'low' : 'available',
+        dateStr: item.dateStr,
+        fullDateText: item.fullLabel,
+        monthYearLabel: item.monthYearLabel,
+        weekLabel: item.weekLabel,
+      };
+    });
+  }, []);
+
+  const activeDay = days.find((d) => d.dateStr === selectedDate) || days[0];
 
   return (
     <section className="flex flex-col gap-2">
@@ -93,12 +56,12 @@ export const CalendarStrip: React.FC<CalendarStripProps> = ({
             calendar_month
           </span>
           <span className="text-[18px] font-bold text-[#dfe2ef]">
-            Octubre 2024
+            {activeDay?.monthYearLabel || 'Calendario Oficial'}
           </span>
         </div>
         <span className="text-[11px] font-bold text-[#4edea3] bg-[#262a34] px-2.5 py-1 rounded-full flex items-center gap-1.5 border border-[#31353f]">
           <span className="w-1.5 h-1.5 rounded-full bg-[#4edea3] animate-pulse"></span>
-          Semana 42
+          {activeDay?.weekLabel || 'Semana Actual'}
         </span>
       </div>
 
@@ -139,13 +102,13 @@ export const CalendarStrip: React.FC<CalendarStripProps> = ({
                   isSelected
                     ? 'opacity-90'
                     : day.statusType === 'full'
-                    ? 'text-[#ffb4ab]'
-                    : day.statusType === 'high_demand'
-                    ? 'text-[#4edea3]'
-                    : 'text-[#86948a]'
+                      ? 'text-[#ffb4ab]'
+                      : day.statusType === 'high_demand'
+                        ? 'text-[#4edea3]'
+                        : 'text-[#86948a]'
                 }`}
               >
-                {day.isToday ? 'LUN' : day.statusLabel}
+                {day.statusLabel}
               </span>
             </button>
           );

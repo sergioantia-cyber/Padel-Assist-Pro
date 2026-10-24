@@ -20,13 +20,18 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   if (!isOpen || !booking) return null;
 
   const clubSettings = getStoredClubSettings();
   const clubAlias = clubSettings.cbu_alias || 'PADEL.PRO.OFICIAL';
+  const bankName = clubSettings.bank_name || 'Bancolombia / Nequi';
+  const accountHolder = clubSettings.account_holder || clubSettings.club_name;
+  const accountNumber = clubSettings.cbu_number || '0000003100045892348210';
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError(null);
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setSelectedFile(file);
@@ -35,16 +40,22 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
   };
 
   const handleSubmit = async () => {
+    if (!selectedFile) {
+      setUploadError('Por favor selecciona la imagen o PDF de tu comprobante antes de enviar.');
+      return;
+    }
+
     setIsUploading(true);
+    setUploadError(null);
     try {
-      let uploadedUrl: string | undefined = undefined;
-      if (selectedFile) {
-        uploadedUrl = await uploadPaymentProofToStorage(selectedFile);
-      }
+      const uploadedUrl = await uploadPaymentProofToStorage(selectedFile);
       onConfirmPayment(uploadedUrl);
-    } catch (err) {
-      console.warn('Error subiendo comprobante:', err);
-      onConfirmPayment(undefined);
+      setSelectedFile(null);
+      setSelectedFileName(null);
+    } catch (err: any) {
+      setUploadError(
+        err?.message || 'No se pudo subir el comprobante. Intenta nuevamente.'
+      );
     } finally {
       setIsUploading(false);
     }
@@ -71,7 +82,7 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex flex-col min-w-0">
             <span className="text-[11px] font-bold text-[#4edea3] uppercase tracking-wider">
-              Pago de Cancha
+              Pago de Cancha • {booking.court_name}
             </span>
             <h2
               className="text-[20px] font-bold text-[#dfe2ef]"
@@ -93,17 +104,23 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
         {/* Club Bank Details */}
         <div className="p-3.5 rounded-xl bg-[#0a0e17] flex flex-col gap-2 border border-white/5">
           <div className="flex justify-between items-center text-[13px]">
-            <span className="text-[#bbcabf]">Banco:</span>
-            <span className="text-[#dfe2ef] font-bold">Santander Río</span>
+            <span className="text-[#bbcabf]">Entidad / Banco:</span>
+            <span className="text-[#dfe2ef] font-bold">{bankName}</span>
           </div>
           <div className="flex justify-between items-center text-[13px]">
             <span className="text-[#bbcabf]">Titular:</span>
             <span className="text-[#dfe2ef] font-medium truncate ml-2">
-              Padel Assist Club S.A.
+              {accountHolder}
             </span>
           </div>
           <div className="flex justify-between items-center text-[13px]">
-            <span className="text-[#bbcabf]">Alias:</span>
+            <span className="text-[#bbcabf]">Cuenta / CBU:</span>
+            <span className="text-[#dfe2ef] font-mono text-[12px]">
+              {accountNumber}
+            </span>
+          </div>
+          <div className="flex justify-between items-center text-[13px]">
+            <span className="text-[#bbcabf]">Alias / Llave:</span>
             <div className="flex items-center gap-1.5">
               <span className="text-[#4edea3] font-mono text-[14px] font-bold">
                 {clubAlias}
@@ -130,6 +147,13 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
           </div>
         </div>
 
+        {uploadError && (
+          <div className="p-3 rounded-xl bg-[#ffb4ab]/15 border border-[#ffb4ab]/30 text-[#ffb4ab] text-xs font-semibold flex items-center gap-2">
+            <span className="material-symbols-outlined text-base">error</span>
+            <span>{uploadError}</span>
+          </div>
+        )}
+
         {/* Upload Zone */}
         <label
           htmlFor="receipt-upload"
@@ -152,8 +176,8 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
           </span>
           <span className="text-[12px] text-[#bbcabf]">
             {selectedFileName
-              ? 'Archivo listo para validar'
-              : 'Formatos JPG, PNG o comprobante bancario (Máx 5MB)'}
+              ? 'Archivo listo para enviar al club'
+              : 'Formatos JPG, PNG o PDF de comprobante bancario (Máx 8MB)'}
           </span>
         </label>
 
@@ -161,7 +185,7 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
         <button
           onClick={handleSubmit}
           disabled={isUploading}
-          className="w-full py-3.5 px-4 rounded-xl bg-[#4edea3] hover:bg-[#6ffbbe] text-[#003824] text-[16px] font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-[#4edea3]/20 cursor-pointer"
+          className="w-full py-3.5 px-4 rounded-xl bg-[#4edea3] hover:bg-[#6ffbbe] text-[#003824] text-[16px] font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-[#4edea3]/20 cursor-pointer disabled:opacity-50"
           type="button"
         >
           {isUploading ? (
@@ -169,12 +193,12 @@ export const PaymentDrawer: React.FC<PaymentDrawerProps> = ({
               <span className="material-symbols-outlined animate-spin text-[20px]">
                 sync
               </span>
-              <span>Enviando Comprobante...</span>
+              <span>Subiendo Comprobante...</span>
             </>
           ) : (
             <>
               <span className="material-symbols-outlined text-[20px]">check</span>
-              <span>Enviar Comprobante</span>
+              <span>Enviar Comprobante Oficial</span>
             </>
           )}
         </button>

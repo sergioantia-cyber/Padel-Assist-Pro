@@ -1,25 +1,39 @@
 import React from 'react';
+import { Booking, Court, Amenity, ClubSettings, UserProfile } from '../types';
 import { ClubRulesAccordion } from '../components/ClubRulesAccordion';
 import { CancheroPanel } from '../components/CancheroPanel';
 import { PWAInstallButton } from '../components/PWAInstallButton';
-import { getStoredClubSettings } from '../apiService';
 
 interface ClubScreenProps {
+  user: UserProfile;
+  bookings: Booking[];
+  courts: Court[];
+  amenities: Amenity[];
+  clubSettings: ClubSettings;
   isAdminMode: boolean;
   onToggleAdminMode: (admin: boolean) => void;
-  onConfirmCancheroPayment: () => void;
-  onBlockCourtSlot: (courtName: string, reason: string) => void;
-  onShowToast: (title: string, desc: string) => void;
+  onConfirmCancheroPayment: (bookingId: string) => void;
+  onBlockCourtSlot: (params: {
+    courtId: string;
+    courtName: string;
+    dateStr: string;
+    timeSlot: string;
+    reason: string;
+  }) => void;
 }
 
 export const ClubScreen: React.FC<ClubScreenProps> = ({
+  user,
+  bookings,
+  courts,
+  amenities,
+  clubSettings,
   isAdminMode,
   onToggleAdminMode,
   onConfirmCancheroPayment,
   onBlockCourtSlot,
-  onShowToast,
 }) => {
-  const clubSettings = getStoredClubSettings();
+  const isClubAdmin = user.role === 'club_admin' || user.role === 'superadmin';
 
   const handleOpenMaps = () => {
     window.open(
@@ -29,26 +43,18 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
   };
 
   const handleOpenWhatsApp = () => {
+    const cleanPhone = clubSettings.whatsapp_phone.replace(/\D/g, '');
     window.open(
-      `https://wa.me/${clubSettings.whatsapp_phone}?text=Hola%20Padel%20Assist,%20tengo%20una%20consulta%20sobre%20mi%20reserva`,
-      '_blank'
-    );
-  };
-
-  const handleCancheroCall = () => {
-    window.location.href = `tel:+${clubSettings.whatsapp_phone}`;
-  };
-
-  const handleCancheroWhatsApp = () => {
-    window.open(
-      `https://wa.me/${clubSettings.whatsapp_phone}?text=Hola,%20te%20escribimos%20de%20la%20cancha%20por%20tu%20turno`,
+      `https://wa.me/${cleanPhone}?text=${encodeURIComponent(
+        `¡Hola ${clubSettings.club_name}! Tengo una consulta sobre las reservas de pádel.`
+      )}`,
       '_blank'
     );
   };
 
   return (
     <div className="flex flex-col w-full gap-5 select-none">
-      {/* Dynamic Role Switcher Bar */}
+      {/* Dynamic Role Switcher Bar (Visible to verified admins, or redirects to /admin login) */}
       <div className="w-full bg-[#262a34]/90 backdrop-blur-xl p-1.5 rounded-full shadow-lg flex items-center justify-between border border-[#31353f]">
         <div className="relative flex w-full p-0.5 rounded-full bg-[#0a0e17]/80">
           <div
@@ -78,7 +84,7 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
             type="button"
           >
             <span className="material-symbols-outlined text-[17px]">
-              vpn_key
+              {isClubAdmin ? 'vpn_key' : 'lock'}
             </span>
             <span>Modo Canchero</span>
           </button>
@@ -90,11 +96,10 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
         <div className="flex flex-col gap-5 animate-in fade-in duration-300">
           {/* Club Location Card with Map Hook */}
           <div className="flex flex-col rounded-xl bg-[#1c1f29]/70 backdrop-blur-md overflow-hidden shadow-xl border border-[#31353f]">
-            {/* Location Preview Thumbnail */}
             <div className="relative w-full h-36 bg-[#0a0e17]">
               <img
                 className="w-full h-full object-cover brightness-90"
-                alt="Club Central Padel & Sport"
+                alt={clubSettings.club_name}
                 src="https://lh3.googleusercontent.com/aida-public/AB6AXuBl6wkhx3wYfsO3VPDrcRk4eJ3C107IXc-GxMnthnsJxQnODVWA9ebsl36f96ewCRST0IDfCwxF9lLb-lBTFVkPPUqBZhslwYe2-ZTpRcQB3FB_QJZrfa_QlqVWhmrr5_b2RkUYGs_LHUSpWkwoheqKme9vUs10PA3Z6w_pCEAZBIrIJYqHMUpUgyOKnXwgHxc0sEp_bd4UUphEEtVqtQL4Kk-XZadFRUqiWhN6wf85BmN1NOwNP6-t"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-[#1c1f29] via-[#1c1f29]/20 to-transparent"></div>
@@ -104,7 +109,7 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-[#4edea3]"></span>
                 </span>
                 <span className="text-[11px] font-bold text-[#4edea3] uppercase">
-                  Canchas Panorámicas
+                  {courts.length} Canchas Oficiales
                 </span>
               </div>
             </div>
@@ -114,15 +119,13 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <h2 className="text-[18px] font-bold text-[#dfe2ef] tracking-tight truncate">
-                    Club Central Padel & Sport
+                    {clubSettings.club_name}
                   </h2>
                   <p className="text-[13px] text-[#bbcabf] flex items-center gap-1 mt-0.5">
                     <span className="material-symbols-outlined text-[16px] text-[#4edea3] shrink-0">
                       pin_drop
                     </span>
-                    <span className="truncate">
-                      Av. Los Pinos 1420, Sector Los Álamos
-                    </span>
+                    <span className="truncate">{clubSettings.address}</span>
                   </p>
                 </div>
                 <span className="font-mono text-[14px] font-bold text-[#68fcbf] bg-[#262a34] px-2 py-1 rounded-lg shrink-0 border border-white/5">
@@ -153,59 +156,60 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
               </div>
               <div>
                 <span className="text-[11px] font-bold text-[#bbcabf] uppercase">
-                  Horarios de Apertura
+                  Horarios de Apertura ({clubSettings.timezone || 'America/Bogota'})
                 </span>
                 <p className="text-[14px] text-[#dfe2ef] font-semibold">
-                  Lun a Dom: 07:00 AM - 11:30 PM
+                  Lun a Dom: {(clubSettings.open_time || '07:00').slice(0, 5)} -{' '}
+                  {(clubSettings.close_time || '23:00').slice(0, 5)} hs
                 </p>
               </div>
             </div>
             <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#4edea3]/20 text-[#4edea3] uppercase shrink-0">
-              Turnos Hoy
+              Abierto Hoy
             </span>
           </div>
 
+          {/* Dynamic Amenities Catalog from Supabase */}
+          <section className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#bbcabf]">
+                Servicios & Pro-Shop del Club
+              </span>
+              <span className="text-[11px] font-mono text-[#4edea3]">
+                En Recepción
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              {amenities.map((amenity) => (
+                <div
+                  key={amenity.id}
+                  className="rounded-xl bg-[#1c1f29]/80 p-3 flex flex-col justify-between gap-2 border border-[#31353f]"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-8 h-8 rounded-lg bg-[#262a34] flex items-center justify-center text-[#4edea3]">
+                      <span className="material-symbols-outlined text-[18px]">
+                        {amenity.icon || 'sports_tennis'}
+                      </span>
+                    </div>
+                    <span className="font-mono text-xs font-bold text-[#4edea3] bg-[#4edea3]/10 px-2 py-0.5 rounded-full">
+                      {amenity.price > 0 ? `$${amenity.price.toFixed(2)}` : 'Gratis'}
+                    </span>
+                  </div>
+                  <div>
+                    <h4 className="text-[13px] font-bold text-[#dfe2ef] leading-tight">
+                      {amenity.title}
+                    </h4>
+                    <p className="text-[11px] text-[#bbcabf] mt-0.5 line-clamp-1">
+                      {amenity.subtitle || 'Disponible en el club'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
           {/* Club Rules & Guidelines (Accordions) */}
           <ClubRulesAccordion />
-
-          {/* Visual Amenity Teasers */}
-          <div className="grid grid-cols-2 gap-2.5">
-            <div className="rounded-xl overflow-hidden bg-[#1c1f29]/70 p-2 flex flex-col gap-2 border border-[#31353f]">
-              <div className="w-full h-20 rounded-lg overflow-hidden bg-[#262a34]">
-                <img
-                  className="w-full h-full object-cover"
-                  alt="5 Canchas Cristal"
-                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuBl6wkhx3wYfsO3VPDrcRk4eJ3C107IXc-GxMnthnsJxQnODVWA9ebsl36f96ewCRST0IDfCwxF9lLb-lBTFVkPPUqBZhslwYe2-ZTpRcQB3FB_QJZrfa_QlqVWhmrr5_b2RkUYGs_LHUSpWkwoheqKme9vUs10PA3Z6w_pCEAZBIrIJYqHMUpUgyOKnXwgHxc0sEp_bd4UUphEEtVqtQL4Kk-XZadFRUqiWhN6wf85BmN1NOwNP6-t"
-                />
-              </div>
-              <div>
-                <h4 className="text-[13px] font-semibold text-[#dfe2ef]">
-                  5 Canchas Cristal
-                </h4>
-                <p className="text-[11px] text-[#bbcabf] line-clamp-1">
-                  Iluminación LED World Padel Tour
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-xl overflow-hidden bg-[#1c1f29]/70 p-2 flex flex-col gap-2 border border-[#31353f]">
-              <div className="w-full h-20 rounded-lg overflow-hidden bg-[#262a34]">
-                <img
-                  className="w-full h-full object-cover"
-                  alt="Quincho & 3er Tiempo"
-                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuCWpTyd8k6uvoC9Y_UyYHg-vg36HN3UTuFiqIopsw5ChrtTGWZJIihQtdHmD91Hsv2bN37hMip6O3fSqBg0hCNag3ye4D6wFygsaFjmdTGKNSNaJUz1FxMJANqJK4aCdxKwe5UfYLbzJyA9gMgdf7-eYNIp9OPutTUQHsgqehBOHZkXVJMIfa-Q-E-MzZXPdt4Q1scjLey8trJQ3QS5t37cRjIoKIjdKkawIeMQ3IU_o33xGyl_SVqI"
-                />
-              </div>
-              <div>
-                <h4 className="text-[13px] font-semibold text-[#dfe2ef]">
-                  Quincho & 3er Tiempo
-                </h4>
-                <p className="text-[11px] text-[#bbcabf] line-clamp-1">
-                  Cafetería de especialidad y bebidas
-                </p>
-              </div>
-            </div>
-          </div>
 
           {/* PWA Mobile App Installation Banner */}
           <PWAInstallButton variant="banner" />
@@ -241,28 +245,29 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
           </div>
         </div>
       ) : (
-        /* VIEW 2: MODO CANCHERO */
+        /* VIEW 2: MODO CANCHERO (Requires Club Admin role) */
         <div className="flex flex-col gap-4">
-          {/* Card to Open Dedicated Admin App */}
           <a
-            href="/admin.html"
-            target="_blank"
-            rel="noreferrer"
+            href="/admin"
             className="w-full p-4 rounded-2xl bg-gradient-to-r from-emerald-950/60 to-zinc-900 border border-emerald-500/40 hover:border-emerald-400 transition-all flex items-center justify-between shadow-xl group cursor-pointer"
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                <span className="material-symbols-outlined text-[24px]">admin_panel_settings</span>
+                <span className="material-symbols-outlined text-[24px]">
+                  admin_panel_settings
+                </span>
               </div>
               <div className="text-left">
                 <div className="flex items-center gap-2">
-                  <h4 className="text-sm font-bold text-white">Admin Privado de Canchas</h4>
+                  <h4 className="text-sm font-bold text-white">
+                    Consola Administrativa Completa
+                  </h4>
                   <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-500 text-zinc-950 uppercase">
-                    Nueva App
+                    /admin
                   </span>
                 </div>
                 <p className="text-xs text-zinc-400">
-                  Modificar precios por hora, activar/pausar pistas y editar WhatsApp oficial
+                  Gestionar tarifas, crear pistas, aprobar comprobantes y configurar el club
                 </p>
               </div>
             </div>
@@ -272,10 +277,10 @@ export const ClubScreen: React.FC<ClubScreenProps> = ({
           </a>
 
           <CancheroPanel
+            bookings={bookings}
+            courts={courts}
             onConfirmPendingPayment={onConfirmCancheroPayment}
             onBlockSlot={onBlockCourtSlot}
-            onQuickCall={handleCancheroCall}
-            onQuickWhatsApp={handleCancheroWhatsApp}
           />
         </div>
       )}

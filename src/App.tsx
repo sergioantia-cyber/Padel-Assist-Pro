@@ -3,31 +3,48 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { NavView, UserProfile, Court, Booking, ToastMessage } from './types';
+import {
+  NavView,
+  UserProfile,
+  Court,
+  Booking,
+  ToastMessage,
+  Amenity,
+  ClubSettings,
+  OpenMatch,
+} from './types';
 import {
   getStoredProfile,
   getStoredBookings,
   getStoredCourts,
+  getStoredAmenities,
+  getStoredClubSettings,
+  getStoredOpenMatch,
   createBookingInDb,
   cancelBookingInDb,
   uploadPaymentProofInDb,
   confirmPaymentByCancheroInDb,
   blockCourtSlotInDb,
-  joinOpenMatchInDb,
-  resetUserProfileInDb,
+  toggleJoinOpenMatchInDb,
+  signOutUser,
   updateUserProfileInDb,
   getBookingsWithRLS,
   fetchCourtsFromSupabase,
   fetchClubSettingsFromSupabase,
+  fetchAmenitiesFromSupabase,
   fetchBookingsFromSupabase,
+  fetchOpenMatchFromSupabase,
   subscribeToRealtimeBookings,
   requestNotificationPermission,
+  syncAuthenticatedUserFromSupabase,
 } from './apiService';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 import { AppHeader } from './components/AppHeader';
 import { BottomNav } from './components/BottomNav';
 import { ToastNotification } from './components/ToastNotification';
 import { UserProfileModal } from './components/UserProfileModal';
+import { AuthModal } from './components/AuthModal';
 import { MatchDetailModal } from './components/MatchDetailModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
@@ -42,69 +59,108 @@ export default function App() {
   const [user, setUser] = useState<UserProfile>(getStoredProfile);
   const [courts, setCourts] = useState<Court[]>(getStoredCourts);
   const [bookings, setBookings] = useState<Booking[]>(getStoredBookings);
-  const [selectedCourtId, setSelectedCourtId] = useState<string>('court-1');
+  const [amenities, setAmenities] = useState<Amenity[]>(getStoredAmenities);
+  const [clubSettings, setClubSettings] = useState<ClubSettings>(getStoredClubSettings);
+  const [openMatch, setOpenMatch] = useState<OpenMatch>(getStoredOpenMatch);
+  const [selectedCourtId, setSelectedCourtId] = useState<string>(
+    getStoredCourts()[0]?.id || '00000000-0000-0000-0000-000000000001'
+  );
   const [isAdminMode, setIsAdminMode] = useState<boolean>(false);
-  const [isMatchJoined, setIsMatchJoined] = useState<boolean>(false);
 
   // Modals & Floating Components
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authPromptMessage, setAuthPromptMessage] = useState<string | undefined>(undefined);
+  const [pendingBookingPayload, setPendingBookingPayload] = useState<{
+    court: Court;
+    dateIso: string;
+    dateLabel: string;
+    dateFull: string;
+    timeSlot: string;
+    durationMin: number;
+    totalPrice: number;
+    courtPrice: number;
+    lightingPrice: number;
+    teamNotes: string;
+  } | null>(null);
   const [detailBooking, setDetailBooking] = useState<Booking | null>(null);
 
-  // Sync admin mode when user role changes
-  useEffect(() => {
-    if (user.role === 'club_admin') {
-      setIsAdminMode(true);
-    }
-  }, [user.role]);
-
-  // Synchronize courts, settings, and bookings from Supabase live database with Realtime
-  useEffect(() => {
-    fetchCourtsFromSupabase().then((loaded) => {
-      if (loaded && loaded.length > 0) {
-        setCourts(loaded);
-        setSelectedCourtId(loaded[0].id);
-      }
-    });
-    fetchClubSettingsFromSupabase();
-    fetchBookingsFromSupabase().then((b) => {
-      if (b && b.length > 0) setBookings(b);
-    });
-
-    // Request notification permission quietly on mount
-    requestNotificationPermission();
-
-    // Subscribe to Supabase Realtime changes
-    const unsubscribe = subscribeToRealtimeBookings(
-      (updatedList) => {
-        setBookings(updatedList);
-      },
-      (confirmedBooking) => {
-        showToast(
-          '¡Pago Confirmado por el Club! 🎾',
-          `Tu turno en ${confirmedBooking.court_name} está 100% confirmado.`
-        );
-      }
-    );
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  // Toast Helper
-  const showToast = useCallback((title: string, description: string, type: 'success' | 'info' | 'error' = 'success') => {
-    setToast({ id: `toast-${Date.now()}`, title, description, type });
-  }, []);
+  const showToast = useCallback(
+    (
+      title: string,
+      description: string,
+      type: 'success' | 'info' | 'error' = 'success'
+    ) => {
+      setToast({ id: `toast-${Date.now()}`, title, description, type });
+    },
+    []
+  );
 
   // Auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => {
       setToast(null);
-    }, 3500);
+    }, 3800);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  // Synchronize auth session, courts, settings, amenities, bookings, and open matches
+  useEffect(() => {
+    syncAuthenticatedUserFromSupabase().then((syncedUser) => {
+      if (syncedUser) {
+        setUser(syncedUser);
+      }
+    });
+
+    fetchClubSettingsFromSupabase().then((settings) => setClubSettings(settings));
+    fetchAmenitiesFromSupabase().then((items) => setAmenities(items));
+
+    fetchBookingsFromSupabase().then((b) => {
+      setBookings(b);
+      fetchCourtsFromSupabase().then((loaded) => {
+        if (loaded && loaded.length > 0) {
+          setCourts(loaded);
+          setSelectedCourtId((prev) =>
+            loaded.some((c) => c.id === prev) ? prev : loaded[0].id
+          );
+        }
+      });
+    });
+
+    fetchOpenMatchFromSupabase(user.id).then((m) => setOpenMatch(m));
+
+    // Listen to Supabase Auth state changes
+    let authSub: { unsubscribe: () => void } | null = null;
+    if (isSupabaseConfigured) {
+      const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (session?.user) {
+          const synced = await syncAuthenticatedUserFromSupabase();
+          if (synced) setUser(synced);
+        }
+      });
+      authSub = data.subscription;
+    }
+
+    // Subscribe to Supabase Realtime changes on bookings
+    const unsubscribeBookings = subscribeToRealtimeBookings(
+      (updatedList) => {
+        setBookings(updatedList);
+      },
+      (confirmedBooking) => {
+        showToast(
+          '¡Pago Confirmado por el Club! 🎾',
+          `Tu turno en ${confirmedBooking.court_name} (${confirmedBooking.start_time}) está 100% confirmado.`
+        );
+      }
+    );
+
+    return () => {
+      unsubscribeBookings();
+      if (authSub) authSub.unsubscribe();
+    };
+  }, [showToast]);
 
   // Actions passed down to components
   const handleNavigate = (newView: NavView) => {
@@ -118,8 +174,57 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const executeBookingCreation = async (
+    data: {
+      court: Court;
+      dateIso: string;
+      dateLabel: string;
+      dateFull: string;
+      timeSlot: string;
+      durationMin: number;
+      totalPrice: number;
+      courtPrice: number;
+      lightingPrice: number;
+      teamNotes: string;
+    },
+    bookingUser: UserProfile
+  ) => {
+    try {
+      // Request notification permission only upon explicit user booking action
+      requestNotificationPermission();
+
+      const newBooking = await createBookingInDb({
+        court: data.court,
+        dateIso: data.dateIso,
+        dateLabel: data.dateLabel,
+        dateFull: data.dateFull,
+        timeSlot: data.timeSlot,
+        durationMin: data.durationMin,
+        totalPrice: data.totalPrice,
+        courtPrice: data.courtPrice,
+        lightingPrice: data.lightingPrice,
+        teamNotes: data.teamNotes,
+        user: bookingUser,
+      });
+
+      setBookings((prev) => [newBooking, ...prev.filter((b) => b.id !== newBooking.id)]);
+      showToast(
+        '¡Pista Reservada!',
+        `Turno ${data.timeSlot} registrado en ${data.court.name}. Sube tu comprobante para confirmar.`
+      );
+      setView('mis-partidos');
+    } catch (err: any) {
+      showToast(
+        'No se pudo reservar',
+        err?.message || 'Verifica la disponibilidad del horario e intenta de nuevo.',
+        'error'
+      );
+    }
+  };
+
   const handleBookingConfirmed = async (data: {
     court: Court;
+    dateIso: string;
     dateLabel: string;
     dateFull: string;
     timeSlot: string;
@@ -129,33 +234,49 @@ export default function App() {
     lightingPrice: number;
     teamNotes: string;
   }) => {
-    const newBooking = await createBookingInDb({
-      court: data.court,
-      dateLabel: data.dateLabel,
-      dateFull: data.dateFull,
-      timeSlot: data.timeSlot,
-      durationMin: data.durationMin,
-      totalPrice: data.totalPrice,
-      courtPrice: data.courtPrice,
-      lightingPrice: data.lightingPrice,
-      teamNotes: data.teamNotes,
-      user,
-    });
-    setBookings((prev) => [newBooking, ...prev]);
-    showToast('¡Pista Reservada!', 'Se ha bloqueado tu turno en ' + data.court.name);
-    setView('mis-partidos');
+    if (!user.is_authenticated) {
+      setPendingBookingPayload(data);
+      setAuthPromptMessage(
+        `Inicia sesión o regístrate en segundos para confirmar tu reserva en ${data.court.name} (${data.timeSlot}) y recibir alertas de tu partido.`
+      );
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    await executeBookingCreation(data, user);
+  };
+
+  const handleAuthSuccess = async (authenticatedUser: UserProfile, message: string) => {
+    setUser(authenticatedUser);
+    showToast('Sesión Iniciada', message);
+
+    if (pendingBookingPayload) {
+      const payload = pendingBookingPayload;
+      setPendingBookingPayload(null);
+      await executeBookingCreation(payload, authenticatedUser);
+    } else {
+      const refreshedBookings = await fetchBookingsFromSupabase();
+      setBookings(refreshedBookings);
+    }
   };
 
   const handleQuickBookingSuccess = () => {
     setBookings(getStoredBookings());
-    showToast('¡Turno Reservado con Éxito!', 'Comprobante listo para enviar por WhatsApp.');
+    showToast(
+      '¡Turno Reservado con Éxito!',
+      'Comprobante listo para enviar por WhatsApp.'
+    );
     setView('mis-partidos');
   };
 
   const handleUploadPaymentProof = async (bookingId: string, proofUrl?: string) => {
+    if (!proofUrl) return;
     const updated = await uploadPaymentProofInDb(bookingId, proofUrl);
     setBookings(updated);
-    showToast('¡Comprobante Enviado!', 'Estamos validando tu comprobante de pago.');
+    showToast(
+      '¡Comprobante Enviado!',
+      'El administrador del club recibirá tu comprobante en tiempo real.'
+    );
   };
 
   const handleCancelBooking = async (bookingId: string) => {
@@ -164,12 +285,27 @@ export default function App() {
     showToast('Turno Cancelado', 'La pista quedó liberada para otros jugadores.');
   };
 
-  const handleInvitePlayers = (booking: Booking) => {
-    const shareUrl = `https://padelassist.app/match/${booking.id}`;
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(shareUrl).catch(() => {});
+  const handleInvitePlayers = async (booking: Booking) => {
+    const shareUrl = `${window.location.origin}/?match=${booking.id}`;
+    const shareText = `🎾 ¡Partido de Pádel en ${clubSettings.club_name}! Cancha: ${booking.court_name} • Horario: ${booking.date_full}. Súmate aquí: ${shareUrl}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Partido en ${clubSettings.club_name}`,
+          text: shareText,
+          url: shareUrl,
+        });
+        return;
+      } catch {
+        // Fallback to clipboard
+      }
     }
-    showToast('¡Enlace copiado!', 'Enlace de partido copiado al portapapeles.');
+
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(shareText).catch(() => {});
+    }
+    showToast('¡Invitación Copiada!', 'El enlace del partido se copió al portapapeles.');
   };
 
   const handleCopyBankAlias = (alias: string) => {
@@ -180,65 +316,105 @@ export default function App() {
   };
 
   const handleJoinOpenMatch = async () => {
-    const res = await joinOpenMatchInDb(user);
-    setIsMatchJoined(true);
-    showToast('¡Sumado al partido!', res.message);
-  };
-
-  const handleAutoSlot = () => {
-    setSelectedCourtId('court-1');
-    setView('reservar');
-    showToast('Reserva Relámpago', 'Seleccionamos la mejor pista para hoy 18:00 hs');
-  };
-
-  const handleConfirmCancheroPayment = async () => {
-    // Confirm the first pending booking if available
-    const pending = bookings.find((b) => b.status === 'pending_payment');
-    if (pending) {
-      const updated = await confirmPaymentByCancheroInDb(pending.id);
-      setBookings(updated);
+    if (!user.is_authenticated) {
+      setAuthPromptMessage(
+        'Inicia sesión o regístrate para sumarte como 4to jugador al partido abierto.'
+      );
+      setIsAuthModalOpen(true);
+      return;
     }
-    showToast('¡Pago Confirmado en Mostrador!', 'Turno 18:00 Pista 1 marcado como Pagado.');
-  };
 
-  const handleBlockCourtSlot = async (courtName: string, reason: string) => {
-    await blockCourtSlotInDb(courtName, '18:00', reason);
-    showToast('¡Slot Bloqueado!', `${courtName} congelada por: ${reason}`);
-  };
-
-  const handleSwitchUserRole = async () => {
-    const nextRole = user.role === 'club_admin' ? 'customer' : 'club_admin';
-    const updated = await updateUserProfileInDb({
-      role: nextRole,
-      full_name: nextRole === 'club_admin' ? 'Canchero Juan' : 'Martín Gómez',
-    });
-    setUser(updated);
-    setIsAdminMode(nextRole === 'club_admin');
+    const res = await toggleJoinOpenMatchInDb(openMatch.id, user);
+    setOpenMatch(res.match);
     showToast(
-      'Rol Actualizado',
-      `Ahora estás en modo ${nextRole === 'club_admin' ? 'Canchero Admin' : 'Jugador'}`
+      res.joined ? '¡Sumado al partido!' : 'Has salido del partido',
+      res.message
     );
   };
 
-  const handleResetData = async () => {
-    const reset = await resetUserProfileInDb();
-    setUser(reset);
-    setCourts(getStoredCourts());
-    setBookings(getStoredBookings());
-    setIsAdminMode(false);
-    setIsMatchJoined(false);
-    showToast('Datos Reiniciados', 'La aplicación volvió a su estado inicial de demostración.');
+  const handleAutoSlot = () => {
+    const activeCourts = courts.filter((c) => c.is_active);
+    if (activeCourts.length > 0) {
+      setSelectedCourtId(activeCourts[0].id);
+    }
+    setView('reservar');
+    showToast(
+      'Reserva Relámpago',
+      `Seleccionamos ${activeCourts[0]?.name || 'Pista Central'} con los mejores horarios libres de hoy.`
+    );
   };
 
-  const hasPending = bookings.some((b) => b.status === 'pending_payment');
+  const handleToggleAdminMode = (wantAdmin: boolean) => {
+    if (!wantAdmin) {
+      setIsAdminMode(false);
+      return;
+    }
+
+    if (user.role === 'club_admin' || user.role === 'superadmin') {
+      setIsAdminMode(true);
+      return;
+    }
+
+    // Redirect or prompt authentication if not an admin
+    showToast(
+      'Acceso Restringido a Cancheros',
+      'Inicia sesión con tu cuenta de administrador o configura el club desde /admin.',
+      'info'
+    );
+    window.location.href = '/admin';
+  };
+
+  const handleConfirmCancheroPayment = async (bookingId: string) => {
+    const updated = await confirmPaymentByCancheroInDb(bookingId);
+    setBookings(updated);
+    showToast(
+      '¡Pago Confirmado en Mostrador!',
+      'El jugador ha sido notificado automáticamente.'
+    );
+  };
+
+  const handleBlockCourtSlot = async (params: {
+    courtId: string;
+    courtName: string;
+    dateStr: string;
+    timeSlot: string;
+    reason: string;
+  }) => {
+    const res = await blockCourtSlotInDb(params);
+    if (res.success) {
+      setBookings(res.bookings);
+      showToast(
+        '¡Horario Bloqueado!',
+        `${params.courtName} (${params.timeSlot}) bloqueada por: ${params.reason}`
+      );
+    } else {
+      showToast(
+        'Error al bloquear',
+        res.error || 'Verifica tener permisos de administrador.',
+        'error'
+      );
+    }
+  };
+
+  const handleUpdateProfile = async (updatedFields: Partial<UserProfile>) => {
+    const updated = await updateUserProfileInDb(updatedFields);
+    setUser(updated);
+  };
+
+  const handleSignOut = async () => {
+    const guest = await signOutUser();
+    setUser(guest);
+    setIsAdminMode(false);
+    showToast('Sesión Cerrada', 'Has cerrado sesión correctamente.');
+  };
+
+  const userVisibleBookings = getBookingsWithRLS(user);
+  const hasPending = userVisibleBookings.some((b) => b.status === 'pending_payment');
 
   return (
     <div className="bg-[#0f131c] text-[#dfe2ef] min-h-screen flex flex-col font-sans selection:bg-[#10b981] selection:text-[#00422b]">
       {/* Dynamic Toast Notification */}
-      <ToastNotification
-        toast={toast}
-        onClose={() => setToast(null)}
-      />
+      <ToastNotification toast={toast} onClose={() => setToast(null)} />
 
       {/* Offline Connectivity Indicator */}
       <OfflineIndicator />
@@ -254,28 +430,36 @@ export default function App() {
         {view === 'canchas' && (
           <CanchasScreen
             user={user}
-            courts={courts}
+            courts={courts.filter((c) => c.is_active)}
+            openMatch={openMatch}
+            clubSettings={clubSettings}
             onSelectCourtForBooking={handleSelectCourtForBooking}
             onJoinOpenMatch={handleJoinOpenMatch}
             onAutoSlot={handleAutoSlot}
-            isMatchJoined={isMatchJoined}
+            isMatchJoined={Boolean(openMatch.is_joined)}
           />
         )}
 
         {view === 'reservar' && (
           <ReservarScreen
             user={user}
-            courts={courts}
+            courts={courts.filter((c) => c.is_active)}
             selectedCourtId={selectedCourtId}
             onCourtChange={(courtId) => setSelectedCourtId(courtId)}
             onBookingConfirmed={handleBookingConfirmed}
             onQuickBookingSuccess={handleQuickBookingSuccess}
+            onRequireAuth={() => {
+              setAuthPromptMessage(
+                'Inicia sesión o regístrate para reservar tu turno vía Selector Rápido.'
+              );
+              setIsAuthModalOpen(true);
+            }}
           />
         )}
 
         {view === 'mis-partidos' && (
           <PartidosScreen
-            bookings={getBookingsWithRLS(user)}
+            bookings={userVisibleBookings}
             onUploadPaymentProof={handleUploadPaymentProof}
             onCancelBooking={handleCancelBooking}
             onInvitePlayers={handleInvitePlayers}
@@ -286,23 +470,42 @@ export default function App() {
 
         {view === 'club-info' && (
           <ClubScreen
+            user={user}
+            bookings={bookings}
+            courts={courts}
+            amenities={amenities}
+            clubSettings={clubSettings}
             isAdminMode={isAdminMode}
-            onToggleAdminMode={(admin) => setIsAdminMode(admin)}
+            onToggleAdminMode={handleToggleAdminMode}
             onConfirmCancheroPayment={handleConfirmCancheroPayment}
             onBlockCourtSlot={handleBlockCourtSlot}
-            onShowToast={showToast}
           />
         )}
       </main>
 
-      {/* Profile & Role Management Modal */}
+      {/* Profile Modal */}
       <UserProfileModal
         isOpen={isProfileModalOpen}
         user={user}
         onClose={() => setIsProfileModalOpen(false)}
-        onSwitchRole={handleSwitchUserRole}
-        onResetDb={handleResetData}
+        onUpdateProfile={handleUpdateProfile}
+        onOpenAuthModal={() => {
+          setAuthPromptMessage(undefined);
+          setIsAuthModalOpen(true);
+        }}
+        onSignOut={handleSignOut}
         onShowToast={showToast}
+      />
+
+      {/* Supabase Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          setPendingBookingPayload(null);
+        }}
+        onAuthSuccess={handleAuthSuccess}
+        promptMessage={authPromptMessage}
       />
 
       {/* Booking Details Modal */}

@@ -9,10 +9,12 @@ export interface UserProfile {
   id: string;
   full_name: string;
   phone: string;
+  email?: string;
   avatar_url?: string;
   role: UserRole;
   category?: string;
   initials?: string;
+  is_authenticated?: boolean;
   created_at?: string;
 }
 
@@ -38,6 +40,7 @@ export interface Court {
   is_active: boolean;
   hourly_rate: number;
   rate_for_90m: number;
+  rate_for_120m?: number;
   photos: string[];
   description: string;
   specs: CourtSpec[];
@@ -54,6 +57,7 @@ export interface Amenity {
   category: 'alquiler' | 'tienda' | 'servicio_gratis';
   price: number;
   is_available: boolean;
+  icon?: string;
   image_url?: string;
   subtitle?: string;
 }
@@ -76,10 +80,14 @@ export interface Booking {
   court_badge?: string;
   user_id: string;
   user_name: string;
+  player_phone?: string;
   guest_name?: string;
   guest_phone?: string;
   start_time: string;
   end_time: string;
+  start_iso?: string;
+  end_iso?: string;
+  date_iso?: string;
   date_label: string;
   date_full: string;
   duration_min: number;
@@ -90,6 +98,7 @@ export interface Booking {
   payment_proof_url?: string;
   payment_method?: string;
   notes?: string;
+  is_block?: boolean;
   players: PlayerSlot[];
   max_players: number;
   location_label: string;
@@ -100,6 +109,8 @@ export interface Booking {
 export interface AvailableSlotResult {
   slot_start: string;
   slot_end: string;
+  slot_start_iso?: string;
+  slot_end_iso?: string;
   time_range: string;
   is_available: boolean;
   period: 'morning' | 'afternoon' | 'night';
@@ -119,6 +130,36 @@ export interface TimeSlot {
   is_last?: boolean;
 }
 
+export interface CalendarDayItem {
+  dateStr: string;
+  dayName: string;
+  dayNum: string;
+  label: string;
+  fullLabel: string;
+  monthYearLabel: string;
+  weekLabel: string;
+  isToday: boolean;
+}
+
+export interface OpenMatchPlayer {
+  id?: string;
+  user_id?: string;
+  player_name: string;
+  initials: string;
+}
+
+export interface OpenMatch {
+  id: string;
+  court_id: string;
+  court_name: string;
+  match_time: string;
+  category_label: string;
+  description: string;
+  max_players: number;
+  players: OpenMatchPlayer[];
+  is_joined?: boolean;
+}
+
 export type NavView = 'canchas' | 'reservar' | 'mis-partidos' | 'club-info';
 
 export interface ToastMessage {
@@ -133,6 +174,12 @@ export interface ClubSettings {
   whatsapp_phone: string;
   cbu_alias: string;
   cbu_number: string;
+  bank_name?: string;
+  account_holder?: string;
   address: string;
+  timezone?: string;
+  open_time?: string;
+  close_time?: string;
+  night_light_surcharge?: number;
+  unpaid_expiry_minutes?: number;
 }
-

@@ -1,10 +1,15 @@
 node_modules/
 build/
 dist/
+dev-dist/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+.antigravity/
+.vercel/
+public/assets/aistudio/
+
 
 .vercel

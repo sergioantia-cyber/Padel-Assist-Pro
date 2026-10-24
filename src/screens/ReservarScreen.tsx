@@ -5,7 +5,12 @@ import { DurationSwitcher } from '../components/DurationSwitcher';
 import { TimeSlotGrid } from '../components/TimeSlotGrid';
 import { BookingSummarySheet } from '../components/BookingSummarySheet';
 import { BookingGrid } from '../components/BookingCalendar';
-import { getAvailableSlots } from '../apiService';
+import {
+  getAvailableSlots,
+  fetchAvailableSlotsForCourt,
+  generateUpcomingCalendarDays,
+  calculateOfficialSlotPrice,
+} from '../apiService';
 
 interface ReservarScreenProps {
   user: UserProfile;
@@ -14,6 +19,7 @@ interface ReservarScreenProps {
   onCourtChange: (courtId: string) => void;
   onBookingConfirmed: (data: {
     court: Court;
+    dateIso: string;
     dateLabel: string;
     dateFull: string;
     timeSlot: string;
@@ -24,6 +30,7 @@ interface ReservarScreenProps {
     teamNotes: string;
   }) => void;
   onQuickBookingSuccess?: () => void;
+  onRequireAuth?: () => void;
 }
 
 export const ReservarScreen: React.FC<ReservarScreenProps> = ({
@@ -32,21 +39,42 @@ export const ReservarScreen: React.FC<ReservarScreenProps> = ({
   onCourtChange,
   onBookingConfirmed,
   onQuickBookingSuccess,
+  onRequireAuth,
 }) => {
+  const initialDays = useMemo(() => generateUpcomingCalendarDays(14), []);
+  const todayItem = initialDays[0];
+
   const [viewMode, setViewMode] = useState<'agenda' | 'chips'>('agenda');
-  const [selectedDate, setSelectedDate] = useState('2024-10-14');
+  const [selectedDate, setSelectedDate] = useState(todayItem.dateStr);
   const [selectedDateLabel, setSelectedDateLabel] = useState('Hoy');
-  const [selectedDateFull, setSelectedDateFull] = useState('Lunes 14 de Octubre');
+  const [selectedDateFull, setSelectedDateFull] = useState(todayItem.fullLabel);
   const [duration, setDuration] = useState(90);
-  const [selectedTimeSlot, setSelectedTimeSlot] = useState('18:00 - 19:30');
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState('18:30 - 20:00');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeCourt = courts.find((c) => c.id === selectedCourtId) || courts[0];
 
-  // Dynamic slot generation driven by stored procedure get_available_slots logic
-  const availableSlots = useMemo(() => {
-    return getAvailableSlots(activeCourt.id, selectedDate, duration);
-  }, [activeCourt.id, selectedDate, duration]);
+  const [availableSlots, setAvailableSlots] = useState<AvailableSlotResult[]>(() =>
+    getAvailableSlots(activeCourt.id, todayItem.dateStr, 90, activeCourt)
+  );
+
+  // Fetch real-time availability from Supabase RPC `get_available_slots` (with local fallback)
+  useEffect(() => {
+    let cancelled = false;
+    setAvailableSlots(getAvailableSlots(activeCourt.id, selectedDate, duration, activeCourt));
+
+    fetchAvailableSlotsForCourt(activeCourt.id, selectedDate, duration, activeCourt).then(
+      (slots) => {
+        if (!cancelled) {
+          setAvailableSlots(slots);
+        }
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCourt, selectedDate, duration]);
 
   // Ensure selected slot stays valid when court, date, or duration changes
   useEffect(() => {
@@ -61,16 +89,13 @@ export const ReservarScreen: React.FC<ReservarScreenProps> = ({
     }
   }, [availableSlots, selectedTimeSlot]);
 
-  // Pricing calculations
-  const baseCourtPrice =
-    duration === 60 ? 18.0 : duration === 90 ? 24.0 : 32.0;
-  const isNightSlot =
-    selectedTimeSlot.includes('18:00') ||
-    selectedTimeSlot.includes('19:30') ||
-    selectedTimeSlot.includes('21:00') ||
-    selectedTimeSlot.includes('22:30');
-  const lightingPrice = isNightSlot ? 4.0 : 0.0;
-  const totalPrice = baseCourtPrice + lightingPrice;
+  // Official pricing calculations from the active court's configured rates
+  const startHour24 = parseInt(selectedTimeSlot.split(':')[0] || '18', 10);
+  const { courtPrice: baseCourtPrice, lightingPrice, totalPrice } = calculateOfficialSlotPrice(
+    activeCourt,
+    duration,
+    startHour24
+  );
 
   const handleSelectDate = (day: CalendarDay) => {
     setSelectedDate(day.dateStr);
@@ -90,6 +115,7 @@ export const ReservarScreen: React.FC<ReservarScreenProps> = ({
       setIsSubmitting(false);
       onBookingConfirmed({
         court: activeCourt,
+        dateIso: selectedDate,
         dateLabel: selectedDateLabel,
         dateFull: selectedDateFull,
         timeSlot: selectedTimeSlot,
@@ -99,7 +125,7 @@ export const ReservarScreen: React.FC<ReservarScreenProps> = ({
         lightingPrice,
         teamNotes: teamNote,
       });
-    }, 900);
+    }, 500);
   };
 
   return (
@@ -179,6 +205,7 @@ export const ReservarScreen: React.FC<ReservarScreenProps> = ({
           <BookingGrid
             courtId={activeCourt.id}
             onBookingSuccess={onQuickBookingSuccess}
+            onRequireAuth={onRequireAuth}
           />
         </div>
       ) : (
@@ -199,7 +226,7 @@ export const ReservarScreen: React.FC<ReservarScreenProps> = ({
                 <span className="material-symbols-outlined text-[14px]">
                   sports_tennis
                 </span>
-                Cristal WPT 12mm
+                {activeCourt.type || 'Cristal WPT 12mm'}
               </span>
             </div>
 

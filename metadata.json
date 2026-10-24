@@ -1,1 +1,6 @@
-{"name":"Padel Assist Pro","description":"Reserva de canchas de pádel, gestión de partidos en tiempo real, validación de comprobantes y panel de control canchero.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
+{
+  "name": "Padel Assist Pro",
+  "description": "Plataforma integral de reserva de canchas de pádel, gestión de turnos en tiempo real, validación de comprobantes y administración de club.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

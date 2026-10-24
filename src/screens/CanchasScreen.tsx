@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Court, CourtFilterType, UserProfile } from '../types';
+import { Court, CourtFilterType, UserProfile, OpenMatch, ClubSettings } from '../types';
 import { MatchmakingBanner } from '../components/MatchmakingBanner';
 import { CourtCard } from '../components/CourtCard';
 import { QuickMatchDrawer } from '../components/QuickMatchDrawer';
@@ -7,6 +7,8 @@ import { QuickMatchDrawer } from '../components/QuickMatchDrawer';
 interface CanchasScreenProps {
   user: UserProfile;
   courts: Court[];
+  openMatch?: OpenMatch;
+  clubSettings?: ClubSettings;
   onSelectCourtForBooking: (courtId: string, preselectedSlot?: string) => void;
   onJoinOpenMatch: () => void;
   onAutoSlot: () => void;
@@ -16,6 +18,8 @@ interface CanchasScreenProps {
 export const CanchasScreen: React.FC<CanchasScreenProps> = ({
   user,
   courts,
+  openMatch,
+  clubSettings,
   onSelectCourtForBooking,
   onJoinOpenMatch,
   onAutoSlot,
@@ -24,7 +28,7 @@ export const CanchasScreen: React.FC<CanchasScreenProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<CourtFilterType>('all');
   const [favorites, setFavorites] = useState<Record<string, boolean>>({});
 
-  const filterChips: Array<{ id: CourtFilterType; label: string; countLabel?: string }> = [
+  const filterChips: Array<{ id: CourtFilterType; label: string }> = [
     { id: 'all', label: `Todas (${courts.length})` },
     { id: 'panoramica', label: 'Panorámica Pro' },
     { id: 'techada', label: 'Cristal Techada' },
@@ -62,8 +66,8 @@ export const CanchasScreen: React.FC<CanchasScreenProps> = ({
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4edea3] opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-[#4edea3]"></span>
             </span>
-            <span className="text-[11px] font-bold text-[#4edea3] tracking-wider uppercase">
-              Sede Norte
+            <span className="text-[11px] font-bold text-[#4edea3] tracking-wider uppercase truncate max-w-[120px]">
+              {clubSettings?.club_name?.split(' ')[0] || 'Sede Norte'}
             </span>
           </div>
         </div>
@@ -73,6 +77,7 @@ export const CanchasScreen: React.FC<CanchasScreenProps> = ({
       <MatchmakingBanner
         onJoinMatch={onJoinOpenMatch}
         isJoined={isMatchJoined}
+        openMatch={openMatch}
       />
 
       {/* Horizontal Filter Chips */}

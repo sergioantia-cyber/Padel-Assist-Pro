@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Court, ClubSettings, Booking } from '../types';
+import { Court, ClubSettings, Booking, UserProfile } from '../types';
 import {
   getStoredCourts,
   saveStoredCourts,
+  createCourtInDb,
   updateCourtPricingInDb,
   toggleCourtActiveInDb,
   getStoredClubSettings,
@@ -14,19 +15,32 @@ import {
   fetchClubSettingsFromSupabase,
   fetchBookingsFromSupabase,
   subscribeToRealtimeBookings,
+  syncAuthenticatedUserFromSupabase,
+  signInWithEmail,
+  signUpWithEmail,
+  signOutUser,
+  claimInitialAdminRole,
 } from '../apiService';
-import { isSupabaseConfigured, supabase } from '../supabaseClient';
+import { isSupabaseConfigured } from '../supabaseClient';
+import completeSetupSql from '../db/complete_setup.sql?raw';
 
 export const AdminApp: React.FC = () => {
-  // Authentication PIN
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return sessionStorage.getItem('padel_admin_auth') === 'true';
-  });
-  const [pinInput, setPinInput] = useState('');
-  const [pinError, setPinError] = useState(false);
+  // Real Supabase Authentication State
+  const [adminUser, setAdminUser] = useState<UserProfile | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authInfo, setAuthInfo] = useState<string | null>(null);
+  const [submittingAuth, setSubmittingAuth] = useState(false);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'courts' | 'settings' | 'bookings' | 'database'>('courts');
+  const [activeTab, setActiveTab] = useState<
+    'courts' | 'settings' | 'bookings' | 'database'
+  >('courts');
 
   // State
   const [courts, setCourts] = useState<Court[]>(getStoredCourts);
@@ -40,13 +54,14 @@ export const AdminApp: React.FC = () => {
   // Form state for editing/new court
   const [courtForm, setCourtForm] = useState({
     name: '',
-    type: '',
+    type: 'Cristal WPT',
     category: 'panoramica' as 'panoramica' | 'techada' | 'exterior',
-    court_number_label: 'Pista',
+    court_number_label: 'Pista 4',
     hourly_rate: 20,
     rate_for_90m: 28,
+    rate_for_120m: 36,
     is_active: true,
-    banner_badge: 'Pro',
+    banner_badge: 'Panorámica Pro',
     photo_url: '',
     description: '',
   });
@@ -58,8 +73,7 @@ export const AdminApp: React.FC = () => {
     setSettingsForm(clubSettings);
   }, [clubSettings]);
 
-  // Synchronize courts, settings, and bookings from Supabase live database + Realtime
-  useEffect(() => {
+  const refreshAdminData = () => {
     fetchCourtsFromSupabase().then((loaded) => {
       if (loaded && loaded.length > 0) setCourts(loaded);
     });
@@ -67,38 +81,146 @@ export const AdminApp: React.FC = () => {
       if (loadedSettings) setClubSettings(loadedSettings);
     });
     fetchBookingsFromSupabase().then((loadedBookings) => {
-      if (loadedBookings && loadedBookings.length > 0) setBookings(loadedBookings);
+      if (loadedBookings) setBookings(loadedBookings);
     });
+  };
+
+  // Verify Supabase session on mount
+  useEffect(() => {
+    let mounted = true;
+    syncAuthenticatedUserFromSupabase()
+      .then((user) => {
+        if (mounted) {
+          setAdminUser(user);
+          setAuthLoading(false);
+        }
+      })
+      .catch(() => {
+        if (mounted) setAuthLoading(false);
+      });
+
+    refreshAdminData();
 
     const unsubscribe = subscribeToRealtimeBookings((updated) => {
       setBookings(updated);
     });
 
     return () => {
+      mounted = false;
       unsubscribe();
     };
   }, []);
 
-  const handlePinSubmit = (e: React.FormEvent) => {
+  const showNotification = (msg: string) => {
+    setSaveSuccessMsg(msg);
+    setTimeout(() => setSaveSuccessMsg(null), 3500);
+  };
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput === '1234' || pinInput === 'admin') {
-      setIsAuthenticated(true);
-      sessionStorage.setItem('padel_admin_auth', 'true');
-      setPinError(false);
-    } else {
-      setPinError(true);
-      setPinInput('');
+    setAuthError(null);
+    setAuthInfo(null);
+    setSubmittingAuth(true);
+
+    try {
+      if (authMode === 'login') {
+        const { user, error } = await signInWithEmail(email, password);
+        if (error || !user) {
+          setAuthError(error || 'Credenciales inválidas.');
+        } else {
+          setAdminUser(user);
+          refreshAdminData();
+        }
+      } else {
+        const { user, error, needsEmailConfirmation } = await signUpWithEmail({
+          email,
+          password,
+          fullName: fullName || 'Administrador del Club',
+          phone,
+          category: 'Administrador Club',
+          claimAdmin: true,
+        });
+
+        if (error) {
+          setAuthError(error);
+        } else if (needsEmailConfirmation) {
+          setAuthInfo(
+            'Cuenta creada. Confirma tu correo en tu bandeja de entrada y luego inicia sesión.'
+          );
+          setAuthMode('login');
+        } else if (user) {
+          setAdminUser(user);
+          refreshAdminData();
+        }
+      }
+    } finally {
+      setSubmittingAuth(false);
     }
   };
 
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    sessionStorage.removeItem('padel_admin_auth');
+  const handleClaimAdmin = async () => {
+    setAuthError(null);
+    setSubmittingAuth(true);
+    try {
+      const { user, error } = await claimInitialAdminRole();
+      if (error || !user) {
+        setAuthError(
+          error ||
+            'No se pudo asignar el rol de administrador. Si ya existe un admin, inicia sesión con esa cuenta.'
+        );
+      } else {
+        setAdminUser(user);
+        refreshAdminData();
+        showNotification('¡Rol de Administrador del Club activado!');
+      }
+    } finally {
+      setSubmittingAuth(false);
+    }
   };
 
-  const showNotification = (msg: string) => {
-    setSaveSuccessMsg(msg);
-    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  const handleLogout = async () => {
+    await signOutUser();
+    setAdminUser(null);
+  };
+
+  const handleOpenNewCourtModal = () => {
+    setCourtForm({
+      name: `Pista ${courts.length + 1} Pro`,
+      type: 'Cristal WPT',
+      category: 'panoramica',
+      court_number_label: `Pista ${courts.length + 1}`,
+      hourly_rate: 20,
+      rate_for_90m: 28,
+      rate_for_120m: 36,
+      is_active: true,
+      banner_badge: 'Panorámica Pro',
+      photo_url: '',
+      description:
+        'Pista profesional con iluminación LED perimetral y césped de alta densidad.',
+    });
+    setIsNewCourtModalOpen(true);
+  };
+
+  const handleCreateNewCourt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const updated = await createCourtInDb({
+        name: courtForm.name,
+        type: courtForm.type,
+        category: courtForm.category,
+        court_number_label: courtForm.court_number_label,
+        hourly_rate: Number(courtForm.hourly_rate),
+        rate_for_90m: Number(courtForm.rate_for_90m),
+        rate_for_120m: Number(courtForm.rate_for_120m),
+        description: courtForm.description,
+        photo_url: courtForm.photo_url,
+      });
+      setCourts(updated);
+      setIsNewCourtModalOpen(false);
+      showNotification('¡Nueva pista creada y publicada con éxito!');
+    } catch (err: any) {
+      showNotification(err?.message || 'Error al crear la nueva pista');
+    }
   };
 
   const handleEditCourtClick = (court: Court) => {
@@ -110,6 +232,7 @@ export const AdminApp: React.FC = () => {
       court_number_label: court.court_number_label,
       hourly_rate: court.hourly_rate,
       rate_for_90m: court.rate_for_90m,
+      rate_for_120m: court.rate_for_120m || Math.round(court.hourly_rate * 1.8),
       is_active: court.is_active,
       banner_badge: court.banner_badge,
       photo_url: court.photos[0] || '',
@@ -132,6 +255,7 @@ export const AdminApp: React.FC = () => {
             court_number_label: courtForm.court_number_label,
             hourly_rate: Number(courtForm.hourly_rate),
             rate_for_90m: Number(courtForm.rate_for_90m),
+            rate_for_120m: Number(courtForm.rate_for_120m),
             is_active: courtForm.is_active,
             banner_badge: courtForm.banner_badge,
             photos: courtForm.photo_url ? [courtForm.photo_url] : c.photos,
@@ -146,7 +270,8 @@ export const AdminApp: React.FC = () => {
       await updateCourtPricingInDb(
         editingCourt.id,
         Number(courtForm.hourly_rate),
-        Number(courtForm.rate_for_90m)
+        Number(courtForm.rate_for_90m),
+        Number(courtForm.rate_for_120m)
       );
 
       setEditingCourt(null);
@@ -173,63 +298,187 @@ export const AdminApp: React.FC = () => {
   const handleConfirmPayment = async (bookingId: string) => {
     const updated = await confirmPaymentByCancheroInDb(bookingId);
     setBookings(updated);
-    showNotification('¡Pago confirmado en mostrador!');
+    showNotification('¡Pago confirmado y jugador notificado en tiempo real!');
   };
 
   const handleCancelBooking = async (bookingId: string) => {
     const updated = await cancelBookingInDb(bookingId);
     setBookings(updated);
-    showNotification('Reserva cancelada');
+    showNotification('Reserva cancelada y horario liberado');
   };
 
-  // 1. PIN Screen
-  if (!isAuthenticated) {
+  const isAuthorizedAdmin =
+    adminUser && (adminUser.role === 'club_admin' || adminUser.role === 'superadmin');
+
+  // 1. Authentication & Role Verification Screen
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#07090e] flex items-center justify-center p-4 text-zinc-400 text-sm">
+        Verificando sesión de administrador...
+      </div>
+    );
+  }
+
+  if (!isAuthorizedAdmin) {
     return (
       <div className="min-h-screen bg-[#07090e] flex items-center justify-center p-4">
-        <div className="w-full max-w-sm bg-[#121620] border border-white/10 rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4">
-            <span className="material-symbols-outlined text-emerald-400 text-3xl">
-              lock
-            </span>
-          </div>
-          <h1 className="text-xl font-bold text-white mb-1">
-            Admin Privado Padel Assist
-          </h1>
-          <p className="text-xs text-zinc-400 mb-6">
-            Acceso exclusivo para cancheros y administradores del club
-          </p>
-
-          <form onSubmit={handlePinSubmit} className="w-full flex flex-col gap-3">
-            <input
-              type="password"
-              placeholder="Ingresa PIN (demo: 1234)"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              className={`w-full text-center tracking-widest text-lg font-mono py-3 px-4 rounded-xl bg-[#1a1f2c] border text-white focus:outline-none transition-all ${
-                pinError
-                  ? 'border-red-500 ring-2 ring-red-500/30'
-                  : 'border-zinc-700 focus:border-emerald-500'
-              }`}
-              autoFocus
-            />
-
-            {pinError && (
-              <span className="text-xs text-red-400">
-                PIN incorrecto. Intenta con 1234.
+        <div className="w-full max-w-md bg-[#121620] border border-white/10 rounded-3xl p-6 shadow-2xl flex flex-col">
+          <div className="flex flex-col items-center text-center mb-5">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-3">
+              <span className="material-symbols-outlined text-emerald-400 text-3xl">
+                shield_person
               </span>
-            )}
+            </div>
+            <h1 className="text-xl font-bold text-white">
+              Consola Admin • Padel Assist Pro
+            </h1>
+            <p className="text-xs text-zinc-400 mt-1">
+              Autenticación oficial con Supabase Auth y Row Level Security (RLS)
+            </p>
+          </div>
 
-            <button
-              type="submit"
-              className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
-            >
-              Desbloquear Panel
-            </button>
-          </form>
+          {adminUser ? (
+            /* Logged in as customer — allow claiming initial admin if no admin exists yet */
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1">
+                <p className="font-bold text-amber-300">
+                  Sesión iniciada como: {adminUser.full_name} ({adminUser.email})
+                </p>
+                <p>
+                  Tu cuenta tiene actualmente el rol <code>{adminUser.role}</code>. Si eres el dueño o administrador inicial del club, reclama la administración con el botón inferior.
+                </p>
+              </div>
+
+              {authError && (
+                <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-xs text-red-300 font-semibold">
+                  {authError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={submittingAuth}
+                onClick={handleClaimAdmin}
+                className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-xl text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
+              >
+                {submittingAuth
+                  ? 'Activando Rol de Administrador...'
+                  : 'Reclamar Administración Inicial del Club'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold rounded-xl text-xs transition-colors"
+              >
+                Cerrar sesión e ingresar con otra cuenta
+              </button>
+            </div>
+          ) : (
+            /* Not logged in — show Supabase Auth Login / Signup */
+            <>
+              <div className="grid grid-cols-2 p-1 rounded-xl bg-[#0a0d14] border border-white/5 mb-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                    authMode === 'login'
+                      ? 'bg-emerald-500 text-zinc-950'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Iniciar Sesión Admin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signup');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                    authMode === 'signup'
+                      ? 'bg-emerald-500 text-zinc-950'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Crear Cuenta Admin
+                </button>
+              </div>
+
+              {authError && (
+                <div className="mb-3 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-xs text-red-300 font-semibold">
+                  {authError}
+                </div>
+              )}
+
+              {authInfo && (
+                <div className="mb-3 p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-xs text-emerald-300 font-semibold">
+                  {authInfo}
+                </div>
+              )}
+
+              <form onSubmit={handleAuthSubmit} className="flex flex-col gap-3">
+                {authMode === 'signup' && (
+                  <>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Nombre del Administrador o Canchero"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="w-full py-2.5 px-3.5 rounded-xl bg-[#1a1f2c] border border-zinc-700 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    />
+                    <input
+                      type="tel"
+                      required
+                      placeholder="WhatsApp (ej. +57 300 123 4567)"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="w-full py-2.5 px-3.5 rounded-xl bg-[#1a1f2c] border border-zinc-700 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    />
+                  </>
+                )}
+
+                <input
+                  type="email"
+                  required
+                  placeholder="Correo electrónico del administrador"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-[#1a1f2c] border border-zinc-700 text-sm text-white focus:outline-none focus:border-emerald-500"
+                />
+
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Contraseña (mín. 6 caracteres)"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-[#1a1f2c] border border-zinc-700 text-sm text-white focus:outline-none focus:border-emerald-500"
+                />
+
+                <button
+                  type="submit"
+                  disabled={submittingAuth}
+                  className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 cursor-pointer mt-1"
+                >
+                  {submittingAuth
+                    ? 'Verificando...'
+                    : authMode === 'login'
+                      ? 'Ingresar al Panel'
+                      : 'Registrar Administrador Inicial'}
+                </button>
+              </form>
+            </>
+          )}
 
           <a
             href="/"
-            className="mt-6 text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1 transition-colors"
+            className="mt-6 text-xs text-zinc-500 hover:text-zinc-300 flex items-center justify-center gap-1 transition-colors"
           >
             <span className="material-symbols-outlined text-sm">arrow_back</span>
             Volver a la App de Jugadores
@@ -256,11 +505,11 @@ export const AdminApp: React.FC = () => {
                 Padel Assist Pro
               </span>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                ADMIN PRIVADO
+                ADMIN VERIFICADO
               </span>
             </div>
             <p className="text-[11px] text-zinc-400">
-              {clubSettings.club_name} • Gestión Integral
+              {clubSettings.club_name} • {adminUser.full_name}
             </p>
           </div>
         </div>
@@ -273,24 +522,22 @@ export const AdminApp: React.FC = () => {
               }`}
             ></span>
             <span className="text-zinc-300">
-              {isSupabaseConfigured ? 'Supabase Conectado' : 'Modo Local'}
+              {isSupabaseConfigured ? 'Supabase Realtime Activo' : 'Modo Local'}
             </span>
           </div>
 
           <a
             href="/"
-            target="_blank"
-            rel="noreferrer"
             className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition-colors flex items-center gap-1.5"
           >
             <span className="material-symbols-outlined text-sm">open_in_new</span>
-            <span>Ver Jugador</span>
+            <span>Ver App Jugador</span>
           </a>
 
           <button
             onClick={handleLogout}
             title="Cerrar Sesión"
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
           >
             <span className="material-symbols-outlined text-xl">logout</span>
           </button>
@@ -362,22 +609,30 @@ export const AdminApp: React.FC = () => {
             }`}
           >
             <span className="material-symbols-outlined text-sm">database</span>
-            <span>Instalación Supabase</span>
+            <span>Esquema SQL Supabase</span>
           </button>
         </div>
 
         {/* TAB 1: COURTS & PRICING */}
         {activeTab === 'courts' && (
           <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-base font-bold text-white">
                   Infraestructura y Tarifas de Canchas
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  Modifica precios por hora y 90 minutos en tiempo real. Se reflejan al instante en la app de reservas.
+                  Modifica precios por 60, 90 y 120 minutos o agrega nuevas pistas al club.
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={handleOpenNewCourtModal}
+                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-base">add</span>
+                <span>Crear Nueva Pista</span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -425,21 +680,29 @@ export const AdminApp: React.FC = () => {
                     </div>
 
                     {/* Pricing Grid */}
-                    <div className="bg-[#181d2a] p-2.5 rounded-xl border border-white/5 grid grid-cols-2 gap-2 text-center">
+                    <div className="bg-[#181d2a] p-2.5 rounded-xl border border-white/5 grid grid-cols-3 gap-2 text-center">
                       <div>
                         <span className="text-[10px] uppercase font-bold text-zinc-500 block">
-                          Turno 60 Min
+                          60 Min
                         </span>
                         <span className="text-sm font-bold text-emerald-400">
-                          ${court.hourly_rate}.00
+                          ${court.hourly_rate}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] uppercase font-bold text-zinc-500 block">
-                          Turno 90 Min
+                          90 Min
                         </span>
                         <span className="text-sm font-bold text-emerald-400">
-                          ${court.rate_for_90m}.00
+                          ${court.rate_for_90m}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-zinc-500 block">
+                          120 Min
+                        </span>
+                        <span className="text-sm font-bold text-emerald-400">
+                          ${court.rate_for_120m || Math.round(court.hourly_rate * 1.8)}
                         </span>
                       </div>
                     </div>
@@ -467,7 +730,7 @@ export const AdminApp: React.FC = () => {
                 Configuración Oficial del Club
               </h2>
               <p className="text-xs text-zinc-400">
-                Al actualizar estos datos, todos los enlaces de WhatsApp, transferencias y reservas se actualizan automáticamente.
+                Al actualizar estos datos, todos los enlaces de WhatsApp, datos bancarios, zona horaria y tarifas nocturnas se actualizan automáticamente.
               </p>
             </div>
 
@@ -497,19 +760,47 @@ export const AdminApp: React.FC = () => {
                   onChange={(e) =>
                     setSettingsForm({ ...settingsForm, whatsapp_phone: e.target.value })
                   }
-                  placeholder="ej: 5491144445555"
+                  placeholder="ej: 573001234567"
                   className="w-full bg-[#181d2a] border border-emerald-500/50 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-400"
                   required
                 />
-                <span className="text-[11px] text-zinc-500 mt-1 block">
-                  Sin signos '+' ni guiones. Usado para recibir comprobantes de pago de los jugadores.
-                </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-bold text-zinc-300 block mb-1">
-                    Alias Bancario / CBU
+                    Banco / Entidad
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.bank_name || ''}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, bank_name: e.target.value })
+                    }
+                    placeholder="Bancolombia / Nequi / Santander"
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-zinc-300 block mb-1">
+                    Titular de la Cuenta
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsForm.account_holder || ''}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, account_holder: e.target.value })
+                    }
+                    placeholder="Padel Assist Club S.A.S."
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-zinc-300 block mb-1">
+                    Alias Bancario / Llave
                   </label>
                   <input
                     type="text"
@@ -530,6 +821,46 @@ export const AdminApp: React.FC = () => {
                     value={settingsForm.cbu_number}
                     onChange={(e) =>
                       setSettingsForm({ ...settingsForm, cbu_number: e.target.value })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-zinc-300 block mb-1">
+                    Zona Horaria del Club
+                  </label>
+                  <select
+                    value={settingsForm.timezone || 'America/Bogota'}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, timezone: e.target.value })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="America/Bogota">America/Bogota (UTC-5)</option>
+                    <option value="America/Argentina/Buenos_Aires">
+                      America/Buenos_Aires (UTC-3)
+                    </option>
+                    <option value="America/Mexico_City">America/Mexico_City (UTC-6)</option>
+                    <option value="America/Santiago">America/Santiago</option>
+                    <option value="Europe/Madrid">Europe/Madrid</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-zinc-300 block mb-1">
+                    Plus Luz Nocturna desde 18:00 ($)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={settingsForm.night_light_surcharge ?? 4}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        night_light_surcharge: Number(e.target.value),
+                      })
                     }
                     className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
                   />
@@ -564,149 +895,328 @@ export const AdminApp: React.FC = () => {
         {activeTab === 'bookings' && (
           <div className="flex flex-col gap-4">
             <h2 className="text-base font-bold text-white">
-              Monitor de Reservas y Comprobantes
+              Monitor de Reservas y Comprobantes ({bookings.length})
             </h2>
 
-            <div className="flex flex-col gap-3">
-              {bookings.map((booking) => (
-                <div
-                  key={booking.id}
-                  className="bg-[#121620] border border-white/10 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-md"
-                >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={booking.court_image}
-                      alt={booking.court_name}
-                      className="w-14 h-14 rounded-xl object-cover border border-white/10"
-                    />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-white">
-                          {booking.court_name}
-                        </span>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            booking.status === 'confirmed'
-                              ? 'bg-emerald-500/20 text-emerald-300'
-                              : booking.status === 'pending_payment'
-                              ? 'bg-amber-500/20 text-amber-300'
-                              : 'bg-zinc-800 text-zinc-400'
-                          }`}
-                        >
-                          {booking.status === 'confirmed'
-                            ? 'PAGADO'
-                            : booking.status === 'pending_payment'
-                            ? 'PENDIENTE VALIDACIÓN'
-                            : booking.status.toUpperCase()}
-                        </span>
-                      </div>
-                      <p className="text-xs text-zinc-400 mt-0.5">
-                        {booking.date_full} • {booking.start_time} - {booking.end_time} ({booking.duration_min} min)
-                      </p>
-                      <p className="text-xs text-emerald-400 font-semibold">
-                        Jugador: {booking.user_name} • Monto: ${booking.total_price}.00
-                      </p>
-                    </div>
-                  </div>
+            {bookings.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-[#121620] border border-white/10 text-center text-sm text-zinc-400">
+                No hay reservas registradas todavía.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {bookings.map((booking) => {
+                  const playerPhoneClean = (
+                    booking.player_phone ||
+                    booking.guest_phone ||
+                    ''
+                  ).replace(/\D/g, '');
 
-                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                    {booking.payment_proof_url && (
-                      <button
-                        onClick={() => setViewingProofUrl(booking.payment_proof_url!)}
-                        className="px-2.5 py-1.5 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center gap-1 border border-blue-500/30"
-                      >
-                        <span className="material-symbols-outlined text-[15px]">receipt_long</span>
-                        <span>Ver Ticket</span>
-                      </button>
-                    )}
-
-                    {booking.status === 'pending_payment' && (
-                      <button
-                        onClick={() => handleConfirmPayment(booking.id)}
-                        className="flex-1 sm:flex-none px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-sm"
-                      >
-                        Aprobar Pago
-                      </button>
-                    )}
-
-                    <button
-                      onClick={() => {
-                        const text = encodeURIComponent(
-                          `¡Hola ${booking.user_name}! El club ${clubSettings.club_name} ha APROBADO y confirmado tu reserva de pádel en ${booking.court_name} (${booking.date_label} a las ${booking.start_time} hs). ¡Nos vemos en la pista! 🎾`
-                        );
-                        window.open(`https://wa.me/${clubSettings.whatsapp_phone}?text=${text}`, '_blank');
-                      }}
-                      className="px-2.5 py-1.5 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-zinc-950 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1 border border-emerald-500/20"
-                      title="Enviar notificación por WhatsApp al jugador"
+                  return (
+                    <div
+                      key={booking.id}
+                      className="bg-[#121620] border border-white/10 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-md"
                     >
-                      <span className="material-symbols-outlined text-[15px]">send</span>
-                      <span>Avisar WhatsApp</span>
-                    </button>
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={booking.court_image}
+                          alt={booking.court_name}
+                          className="w-14 h-14 rounded-xl object-cover border border-white/10"
+                        />
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm text-white">
+                              {booking.court_name}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                booking.status === 'confirmed'
+                                  ? 'bg-emerald-500/20 text-emerald-300'
+                                  : booking.status === 'pending_payment'
+                                    ? 'bg-amber-500/20 text-amber-300'
+                                    : 'bg-zinc-800 text-zinc-400'
+                              }`}
+                            >
+                              {booking.is_block
+                                ? 'BLOQUEO DE CANCHA'
+                                : booking.status === 'confirmed'
+                                  ? 'PAGADO'
+                                  : booking.status === 'pending_payment'
+                                    ? 'PENDIENTE VALIDACIÓN'
+                                    : booking.status.toUpperCase()}
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-400 mt-0.5">
+                            {booking.date_full} ({booking.duration_min} min)
+                          </p>
+                          <p className="text-xs text-emerald-400 font-semibold">
+                            Jugador: {booking.user_name}{' '}
+                            {booking.player_phone ? `(${booking.player_phone})` : ''} •
+                            Monto: ${booking.total_price.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
 
-                    {booking.status !== 'cancelled' && (
-                      <button
-                        onClick={() => handleCancelBooking(booking.id)}
-                        className="px-3 py-1.5 bg-zinc-800 hover:bg-red-500/20 hover:text-red-300 text-zinc-400 text-xs font-semibold rounded-xl transition-all cursor-pointer"
-                      >
-                        Cancelar
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+                      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                        {booking.payment_proof_url && (
+                          <button
+                            onClick={() => setViewingProofUrl(booking.payment_proof_url!)}
+                            className="px-2.5 py-1.5 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center gap-1 border border-blue-500/30"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">
+                              receipt_long
+                            </span>
+                            <span>Ver Comprobante</span>
+                          </button>
+                        )}
+
+                        {booking.status === 'pending_payment' && (
+                          <button
+                            onClick={() => handleConfirmPayment(booking.id)}
+                            className="flex-1 sm:flex-none px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-sm"
+                          >
+                            Aprobar Pago
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => {
+                            const text = encodeURIComponent(
+                              `¡Hola ${booking.user_name}! El club ${clubSettings.club_name} ha APROBADO y confirmado tu reserva de pádel en ${booking.court_name} (${booking.date_full}). ¡Nos vemos en la pista! 🎾`
+                            );
+                            const waTarget = playerPhoneClean
+                              ? `https://wa.me/${playerPhoneClean}?text=${text}`
+                              : `https://wa.me/?text=${text}`;
+                            window.open(waTarget, '_blank');
+                          }}
+                          className="px-2.5 py-1.5 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-zinc-950 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1 border border-emerald-500/20"
+                          title="Enviar notificación por WhatsApp al teléfono del jugador"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">
+                            send
+                          </span>
+                          <span>Avisar Jugador</span>
+                        </button>
+
+                        {booking.status !== 'cancelled' && (
+                          <button
+                            onClick={() => handleCancelBooking(booking.id)}
+                            className="px-3 py-1.5 bg-zinc-800 hover:bg-red-500/20 hover:text-red-300 text-zinc-400 text-xs font-semibold rounded-xl transition-all cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
         {/* TAB 4: DATABASE / SUPABASE SETUP */}
         {activeTab === 'database' && (
           <div className="bg-[#121620] border border-white/10 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-base font-bold text-white">
-                  Instalación Integral de Supabase
+                  Esquema de Producción Supabase (RLS + GiST + Timezone + RPCs)
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  Archivo SQL listo con tablas, RLS, función get_available_slots, canchas iniciales y bucket de comprobantes.
+                  Copia el script SQL completo con 1 clic y ejecútalo en el SQL Editor de Supabase para actualizar triggers, políticas RLS y funciones.
                 </p>
               </div>
 
-              <a
-                href="https://supabase.com/dashboard/project/sembcqfavhepdyctgkcp/sql"
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold transition-all flex items-center gap-1.5"
-              >
-                <span className="material-symbols-outlined text-sm">open_in_new</span>
-                <span>Abrir SQL Editor Supabase</span>
-              </a>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(completeSetupSql);
+                    showNotification('¡Script SQL completo copiado al portapapeles!');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-bold transition-all flex items-center gap-1.5 border border-emerald-500/30 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">content_copy</span>
+                  <span>Copiar SQL Completo</span>
+                </button>
+
+                <a
+                  href="https://supabase.com/dashboard/project/sembcqfavhepdyctgkcp/sql/new"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold transition-all flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-sm">open_in_new</span>
+                  <span>Abrir SQL Editor Supabase</span>
+                </a>
+              </div>
             </div>
 
-            <div className="bg-[#0b0e14] border border-white/5 rounded-xl p-3 text-xs font-mono text-zinc-300 flex items-center justify-between">
-              <span>Ruta del script en el proyecto: src/db/complete_setup.sql</span>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText('src/db/complete_setup.sql');
-                  showNotification('Ruta copiada al portapapeles');
-                }}
-                className="text-emerald-400 hover:underline cursor-pointer"
-              >
-                Copiar ruta
-              </button>
-            </div>
-
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex flex-col gap-1">
-              <span className="font-bold flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-sm">verified</span>
-                Listo para ejecutar en 1 clic
-              </span>
-              <span>
-                Copia y pega el contenido de <code>src/db/complete_setup.sql</code> en el SQL Editor de Supabase y presiona "Run" para sincronizar la base de datos completa.
-              </span>
-            </div>
+            <pre className="bg-[#0b0e14] border border-white/5 rounded-xl p-4 text-[11px] font-mono text-zinc-300 max-h-96 overflow-y-auto whitespace-pre-wrap">
+              {completeSetupSql}
+            </pre>
           </div>
         )}
       </div>
+
+      {/* Modal: Crear Nueva Cancha */}
+      {isNewCourtModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121620] border border-white/10 rounded-3xl max-w-md w-full p-5 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-white">
+                Crear Nueva Pista en el Club
+              </h3>
+              <button
+                onClick={() => setIsNewCourtModalOpen(false)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateNewCourt} className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-zinc-300 block mb-1">
+                    Etiqueta Corta
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={courtForm.court_number_label}
+                    onChange={(e) =>
+                      setCourtForm({ ...courtForm, court_number_label: e.target.value })
+                    }
+                    placeholder="Pista 4"
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-zinc-300 block mb-1">
+                    Categoría Filtro
+                  </label>
+                  <select
+                    value={courtForm.category}
+                    onChange={(e) =>
+                      setCourtForm({
+                        ...courtForm,
+                        category: e.target.value as 'panoramica' | 'techada' | 'exterior',
+                      })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white"
+                  >
+                    <option value="panoramica">Panorámica Pro</option>
+                    <option value="techada">Cristal Techada</option>
+                    <option value="exterior">Pista Exterior</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-zinc-300 block mb-1">
+                  Nombre Oficial de la Pista
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={courtForm.name}
+                  onChange={(e) => setCourtForm({ ...courtForm, name: e.target.value })}
+                  className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-zinc-300 block mb-1">
+                  Tipo / Superficie
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={courtForm.type}
+                  onChange={(e) => setCourtForm({ ...courtForm, type: e.target.value })}
+                  className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-xs font-bold text-emerald-400 block mb-1">
+                    60 Min ($)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={courtForm.hourly_rate}
+                    onChange={(e) =>
+                      setCourtForm({ ...courtForm, hourly_rate: Number(e.target.value) })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-2.5 py-2 text-sm text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-emerald-400 block mb-1">
+                    90 Min ($)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={courtForm.rate_for_90m}
+                    onChange={(e) =>
+                      setCourtForm({ ...courtForm, rate_for_90m: Number(e.target.value) })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-2.5 py-2 text-sm text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-emerald-400 block mb-1">
+                    120 Min ($)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={courtForm.rate_for_120m}
+                    onChange={(e) =>
+                      setCourtForm({ ...courtForm, rate_for_120m: Number(e.target.value) })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-2.5 py-2 text-sm text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-zinc-300 block mb-1">
+                  Descripción
+                </label>
+                <textarea
+                  rows={2}
+                  value={courtForm.description}
+                  onChange={(e) =>
+                    setCourtForm({ ...courtForm, description: e.target.value })
+                  }
+                  className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsNewCourtModalOpen(false)}
+                  className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl text-xs"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-xl text-xs shadow-md"
+                >
+                  Crear Pista
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Editar Cancha */}
       {editingCourt && (
@@ -740,10 +1250,10 @@ export const AdminApp: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-xs font-bold text-emerald-400 block mb-1">
-                    Tarifa 60 Min ($)
+                    60 Min ($)
                   </label>
                   <input
                     type="number"
@@ -754,13 +1264,13 @@ export const AdminApp: React.FC = () => {
                         hourly_rate: Number(e.target.value),
                       })
                     }
-                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-2.5 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
                     required
                   />
                 </div>
                 <div>
                   <label className="text-xs font-bold text-emerald-400 block mb-1">
-                    Tarifa 90 Min ($)
+                    90 Min ($)
                   </label>
                   <input
                     type="number"
@@ -771,7 +1281,24 @@ export const AdminApp: React.FC = () => {
                         rate_for_90m: Number(e.target.value),
                       })
                     }
-                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-2.5 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-emerald-400 block mb-1">
+                    120 Min ($)
+                  </label>
+                  <input
+                    type="number"
+                    value={courtForm.rate_for_120m}
+                    onChange={(e) =>
+                      setCourtForm({
+                        ...courtForm,
+                        rate_for_120m: Number(e.target.value),
+                      })
+                    }
+                    className="w-full bg-[#181d2a] border border-zinc-700 rounded-xl px-2.5 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
                     required
                   />
                 </div>
@@ -836,7 +1363,9 @@ export const AdminApp: React.FC = () => {
           <div className="bg-[#121620] border border-white/10 rounded-3xl max-w-lg w-full p-5 shadow-2xl flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
-                <span className="material-symbols-outlined text-emerald-400">receipt_long</span>
+                <span className="material-symbols-outlined text-emerald-400">
+                  receipt_long
+                </span>
                 Comprobante de Pago de Transferencia
               </h3>
               <button
