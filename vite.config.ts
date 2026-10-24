@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
               try {
                 const body = rawBody ? JSON.parse(rawBody) : {};
                 process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || env.GEMINI_API_KEY;
-                const { default: handler } = await import('./api/coach.ts');
+                const { default: handler } = await import('./api/coach.js');
                 const mockRes = {
                   status(code: number) {
                     res.statusCode = code;
