@@ -1,0 +1,161 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #0f131c;
+  --color-surface-dim: #0f131c;
+  --color-surface-bright: #353943;
+  --color-surface-variant: #31353f;
+  --color-surface-container-lowest: #0a0e17;
+  --color-surface-container-low: #181b25;
+  --color-surface-container: #1c1f29;
+  --color-surface-container-high: #262a34;
+  --color-surface-container-highest: #31353f;
+
+  --color-primary: #4edea3;
+  --color-primary-container: #10b981;
+  --color-primary-fixed: #6ffbbe;
+  --color-primary-fixed-dim: #4edea3;
+  --color-on-primary: #003824;
+  --color-on-primary-container: #00422b;
+  --color-on-primary-fixed: #002113;
+
+  --color-secondary: #45dfa4;
+  --color-secondary-container: #00bd85;
+  --color-secondary-fixed: #68fcbf;
+  --color-secondary-fixed-dim: #45dfa4;
+  --color-on-secondary: #003825;
+  --color-on-secondary-container: #00452e;
+
+  --color-tertiary: #7bd0ff;
+  --color-tertiary-container: #19aee8;
+  --color-tertiary-fixed: #c4e7ff;
+  --color-tertiary-fixed-dim: #7bd0ff;
+  --color-on-tertiary: #00354a;
+  --color-on-tertiary-container: #003e55;
+
+  --color-on-surface: #dfe2ef;
+  --color-on-surface-variant: #bbcabf;
+  --color-outline: #86948a;
+  --color-outline-variant: #3c4a42;
+
+  --color-error: #ffb4ab;
+  --color-error-container: #93000a;
+  --color-on-error: #690005;
+  --color-on-error-container: #ffdad6;
+
+  --font-headline-xl: "Plus Jakarta Sans", sans-serif;
+  --font-headline-lg: "Plus Jakarta Sans", sans-serif;
+  --font-headline-lg-mobile: "Plus Jakarta Sans", sans-serif;
+  --font-headline-md: "Plus Jakarta Sans", sans-serif;
+  --font-body-lg: "Plus Jakarta Sans", sans-serif;
+  --font-body-md: "Plus Jakarta Sans", sans-serif;
+  --font-body-sm: "Plus Jakarta Sans", sans-serif;
+  --font-label-tag: "Plus Jakarta Sans", sans-serif;
+  --font-label-numeric-lg: "Space Grotesk", monospace;
+  --font-label-numeric-md: "Space Grotesk", monospace;
+  --font-label-numeric-sm: "Space Grotesk", monospace;
+
+  --spacing-space-xs: 0.25rem;
+  --spacing-space-sm: 0.5rem;
+  --spacing-space-md: 0.875rem;
+  --spacing-space-lg: 1.25rem;
+  --spacing-space-xl: 2rem;
+  --spacing-margin: 1rem;
+  --spacing-gutter: 0.75rem;
+}
+
+@layer base {
+  html, body {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #0f131c;
+    color: #dfe2ef;
+    font-family: "Plus Jakarta Sans", sans-serif;
+  }
+  body {
+    overscroll-behavior: none;
+    min-height: 100dvh;
+  }
+  .pb-safe {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  }
+  .pt-safe {
+    padding-top: max(env(safe-area-inset-top, 0px), 8px);
+  }
+}
+
+/* Custom Typography Helpers */
+.text-headline-lg-mobile {
+  font-size: 24px;
+  line-height: 30px;
+  letter-spacing: -0.015em;
+  font-weight: 700;
+}
+.text-headline-md {
+  font-size: 20px;
+  line-height: 26px;
+  letter-spacing: -0.01em;
+  font-weight: 700;
+}
+.text-body-lg {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+.text-body-md {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
+.text-body-sm {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+}
+.text-label-tag {
+  font-size: 11px;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.text-label-numeric-lg {
+  font-family: "Space Grotesk", monospace;
+  font-size: 22px;
+  line-height: 26px;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+.text-label-numeric-md {
+  font-family: "Space Grotesk", monospace;
+  font-size: 16px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.text-label-numeric-sm {
+  font-family: "Space Grotesk", monospace;
+  font-size: 12px;
+  line-height: 14px;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+/* Hide scrollbar for clean carousel navigation */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Material symbols font settings */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.material-symbols-outlined.fill {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
